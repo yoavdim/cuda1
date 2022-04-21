@@ -68,9 +68,19 @@ int main() {
 
     struct task_serial_context *ts_context = task_serial_init();
 
+    if (!ts_context)
+	{
+	    printf("allocation failed\n");
+    	return -1;
+	}
+
     t_start = get_time_msec();
     task_serial_process(ts_context, images_in, images_out_gpu_serial);
     t_finish = get_time_msec();
+//	for (int i = 0; i < IMG_SIZE; i++) {
+//			printf("%d", images_out_gpu_serial[i]);
+//	}
+//	printf("\n");
     distance_sqr = distance_sqr_between_image_arrays(images_out_cpu, images_out_gpu_serial);
     printf("total time %f [msec]  distance from baseline %lld (should be zero)\n", t_finish - t_start, distance_sqr);
 

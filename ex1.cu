@@ -2,7 +2,7 @@
 
 //#define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
 
-__device__ void prefix_sum(int arr[], int arr_size) {
+__device__ void prefix_sum(int arr[256], int arr_size) {
     int tid = threadIdx.x;
     int increment;
     // trick: allow running multiple times (modulu) & skip threads (negative arr_size)
@@ -32,33 +32,36 @@ __device__ void prefix_sum(int arr[], int arr_size) {
  * @param out_img single output buffer, in global memory.
  */
 __device__ 
-void interpolate_device(uchar* maps ,uchar *in_img, uchar* out_img);
+void interpolate_device(uchar *maps ,uchar *in_img, uchar* out_img);
 
 /**
 * map between a thread to its tile, total tile number is TILES_COUNT^2
 */
-__global__ int get_tile_id(int index) {
+__device__ int get_tile_id(int index) {
     int line = index / IMG_WIDTH;
     int col  = index % IMG_WIDTH;
     line = line / TILE_HEIGHT; // round down
     col  = col / TILE_WIDTH; 
-    return line * TILES_COUNT + col;
+    return line * TILE_COUNT + col;
 }
 
 
+__device__ int histograms[N_IMAGES][IMG_TILES][256]; // not enough shared memory, so each block allocating a different one for each image
 __global__ void process_image_kernel(uchar *all_in, uchar *all_out, uchar *maps) {
-    __shared__ int histograms[IMG_TILES][256]; // shared memory, so each block allocating a different one for each image
     int tid = threadIdx.x;
     int bid = blockIdx.x;
     int tnum = blockDim.x;
 
     for (int i = tid; i < IMG_TILES*256; i += tnum) { // set zero
-        ((int*) histograms)[i] = 0;
+        ((int*) histograms)[bid*IMG_TILES*256 + i] = 0;
     }
     __syncthreads();
 
     for (int index = tid; index < IMG_SIZE; index += tnum) { // calc histograms
-        atomicAdd(&(histograms[get_tile_id(index)][all_in[IMG_SIZE*bid + index]]), 1);
+	int tile = get_tile_id(index);
+	uchar pix_val = all_in[IMG_SIZE*bid + index];
+	int *hist = &(histograms[bid][tile][pix_val]);
+        atomicAdd(hist, 1);
     }
     __syncthreads();
 
@@ -68,19 +71,28 @@ __global__ void process_image_kernel(uchar *all_in, uchar *all_out, uchar *maps)
         if (tile >= IMG_TILES) 
             prefix_sum(NULL, -256);  // keep internal syncthread from blocking the rest
         else 
-            prefix_sum(&(histograms[tile][0]), 256);
+            prefix_sum(&(histograms[bid][tile][0]), 256);
     }
+
+//    for (int i = 0; i < IMG_TILES ; i++) {
+//	    prefix_sum(histograms[bid][i], 256);
+//	    __syncthreads();
+//    }
+
     __syncthreads();
 
     // create map
     for (int i = tid; i < IMG_TILES*256; i += tnum) { 
-        int cdf = ((int*) histograms)[i];
-        map[MAP_SIZE*bid + i] = (uchar) ((((double)cdf)*255)/(TILE_WIDTH*TILE_HEIGHT)); // cast will round down
+        int cdf = ((int*) histograms)[IMG_TILES*256*bid + i];
+//        maps[MAP_SIZE*bid + i] = (uchar) ((((double)cdf)*255)/(TILE_WIDTH*TILE_HEIGHT)); // cast will round down
+	uchar map_value =(((double)cdf) / (TILE_WIDTH*TILE_HEIGHT)) * 255;
+	maps[MAP_SIZE*bid + i] = map_value;
     }
     __syncthreads();
-    
-    interpolate_device(maps, all_in, all_out);
-    return; 
+
+    interpolate_device(maps + MAP_SIZE*bid, all_in + IMG_SIZE * bid, all_out + IMG_SIZE * bid);
+
+    __syncthreads();
 }
 
 /* Task serial context struct with necessary CPU / GPU pointers to process a single image */
@@ -98,9 +110,9 @@ struct task_serial_context *task_serial_init()
 {
     auto context = new task_serial_context;
 
-    cudaMalloc((void**)&(context->d_image_in),  IMG_SIZE);
-    cudaMalloc((void**)&(context->d_image_out), IMG_SIZE);
-    cudaMalloc((void**)&(context->d_maps), MAP_SIZE);
+    CUDA_CHECK(cudaMalloc((void**)&(context->d_image_in),  IMG_SIZE));
+    CUDA_CHECK(cudaMalloc((void**)&(context->d_image_out), IMG_SIZE));
+    CUDA_CHECK(cudaMalloc((void**)&(context->d_maps), MAP_SIZE));
     //TODO: allocate GPU memory for a single input image, a single output image, and maps
 
     return context;
@@ -115,11 +127,12 @@ void task_serial_process(struct task_serial_context *context, uchar *images_in, 
     //   2. invoke GPU kernel on this image
     //   3. copy output from GPU memory to relevant location in images_out_gpu_serial
     for (int i=0; i < N_IMAGES; i++) {
-        cudaMemcpy(context->d_image_in + i*IMG_SIZE, images_in + i*IMG_SIZE, IMG_SIZE, cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMemcpy(context->d_image_in, images_in + i*IMG_SIZE, IMG_SIZE, cudaMemcpyHostToDevice));
         process_image_kernel<<<1,THREAD_NUM>>>(context->d_image_in, context->d_image_out, context->d_maps);  // 
         cudaDeviceSynchronize();
         CUDA_CHECK(cudaGetLastError());
-        cudaMemcpy(context->d_image_out + i*IMG_SIZE, images_out + i*IMG_SIZE, IMG_SIZE, cudaMemcpyDeviceToHost);
+        //cudaMemcpy(context->d_image_out, images_out + i*IMG_SIZE, IMG_SIZE, cudaMemcpyDeviceToHost);
+        cudaMemcpy(images_out + i*IMG_SIZE, context->d_image_out, IMG_SIZE, cudaMemcpyDeviceToHost);
     }
 }
 
@@ -162,11 +175,12 @@ void gpu_bulk_process(struct gpu_bulk_context *context, uchar *images_in, uchar 
     //TODO: copy all input images from images_in to the GPU memory you allocated
     //TODO: invoke a kernel with N_IMAGES threadblocks, each working on a different image
     //TODO: copy output images from GPU memory to images_out
-    cudaMemcpy(context->d_image_in, images_in, IMG_SIZE*N_IMAGES, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(context->d_image_in, images_in, IMG_SIZE*N_IMAGES, cudaMemcpyHostToDevice));
     process_image_kernel<<<N_IMAGES,THREAD_NUM>>>(context->d_image_in, context->d_image_out, context->d_maps);  // 
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
     CUDA_CHECK(cudaGetLastError());
-    cudaMemcpy(context->d_image_out, images_out, IMG_SIZE*N_IMAGES, cudaMemcpyDeviceToHost);
+//    cudaMemcpy(context->d_image_out, images_out, IMG_SIZE*N_IMAGES, cudaMemcpyDeviceToHost);
+    cudaMemcpy(images_out, context->d_image_out, IMG_SIZE*N_IMAGES, cudaMemcpyDeviceToHost);
 }
 
 /* Release allocated resources for the bulk GPU implementation. */

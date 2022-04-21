@@ -25,9 +25,10 @@
 #else 
     #define THREAD_NUM 256
 #endif
+//#define THREAD_NUM 256
 
 typedef unsigned char uchar;
-
+typedef short int sint;
 #define CUDA_CHECK(f) do {                                                                  \
     cudaError_t e = f;                                                                      \
     if (e != cudaSuccess) {                                                                 \
