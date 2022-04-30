@@ -53,7 +53,7 @@ class BTB_Struct {
 	BTB_Struct(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned fsmState) {
 		BTB_pointer= new BTB_data[btbSize];//each BTB_data[i] is a line in the BTB table 
 		BTB_sizeLines=btbSize;
-		tagNumBits=tagNumBits;
+		tagNumBits=tagSize;
 		FsmDefault=fsmState;
 		historySizeBits=historySize;
 		num_of_updates=0;
@@ -156,15 +156,72 @@ class BTB_Struct {
 
 
 
-	void get_tag_n_index(uint32_t pc, unsigned &tag, int &index){...} // does not check existance, only translating the bits TODO implement (pc=pc>>2; )
+
+////////haven't debugged yet////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/** 
+* @brief extract tag and index from pc
+*/
+    void get_tag_n_index(uint32_t pc, unsigned &tag, int &index){ // does not check existance, only translating the bits TODO implement (pc=pc>>2; )
+        uint32_t value_index;
+        value_index=pc>>2;//lowest 2 bits are zero
+        int numb_bit_table=log2(BTB_sizeLines);
+        tag=pc>>(2+numb_bit_table);//change the reference variable-tag from the pc
+        int mask=0;
+        while (numb_bit_table>=0){
+            mask=mask<<1;//shift left
+            mask++;
+            numb_bit_table--;
+        }
+        index=value_index & mask;//change the reference variable-index from the pc
+    }
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
 	protected:
 	// use in prediction, not update
 	virtual unsigned& get_history(BTB_data *entry); // return GlobalHistory  or entry->history_LH	
 	virtual int* get_state_array(BTB_data *entry);  // return GlobalFSMTable or entry->FSM_poiner
 	virtual int* local_fsm_array_create();          // return new int[1<<historySizeBits](FsmDefault) or nullptr if using GlobalFSMTable
-	virtual int  run_share(unsigned history, uint32_t pc); // if lshare or gshare, xor history with some pc bits TODO understand which bits (different for l&g)
+//	virtual int run_share(unsigned history, uint32_t pc); // if lshare or gshare, xor history with some pc bits TODO understand which bits (different for l&g)
+    int run_share(unsigned history, uint32_t pc, int is_share, unsigned historySizeBits); // if lshare or gshare, xor history with some pc bits TODO understand which bits (different for l&g)
 }
 
+
+////////haven't debugged yet////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/** 
+* @brief Calculate what is the index-with XOR 
+*/
+int BTB_Struct::run_share(unsigned history, uint32_t pc, int is_share, unsigned historySizeBits ){
+    if (is_share==0){   //not_using_share
+        return history;
+    }
+    else if(is_share==0){  //using_share_lsb
+        pc=pc>>2;//get rid from two zero bits
+        int mask =0;
+        int History_bits=historySizeBits;
+        while(History_bits>=0){
+            mask=mask<<1;
+            mask++;
+            History_bits--;
+        }
+        pc= mask & pc;
+        return pc^history;
+    }
+    else{   ////using_share_mid
+        pc=pc>>16;//get rid 16 lowest 16 bits
+        int mask =0;
+        int History_bits=historySizeBits;
+        while(History_bits>=0){
+            mask=mask<<1;
+            mask++;
+            History_bits--;
+        }
+        pc= mask & pc;
+        return pc^history;
+    }
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 //************part2***********************
 
@@ -183,6 +240,9 @@ public:
 			}
 	}
 
+
+
+
 	unsigned& get_history(BTB_data *entry) override {
 		return entry->history_LH;
 	} 
@@ -200,15 +260,17 @@ public:
 class LH_GT : public BTB_Struct {
 	public:
 	int* GlobalFSMTable;
-	bool is_share;
+	int is_share;
 
-	LH_GT(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned fsmState, bool is_share)
+	LH_GT(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned fsmState, int is_share)
 		:BTB_Struct(btbSize, historySize, tagSize, fsmState) {
 			GlobalFSMTable = new int[1<<historySizeBits];
 			MEMSET(GlobalFSMTable, FsmDefault, 1<<historySizeBits);
-			LH_GT::is_share = is_share;
+			is_share = is_share;
+
 			// LH already initialized
 	}
+    
 
 	unsigned& get_history(BTB_data *entry) override {
 		return entry->history_LH;
@@ -220,6 +282,7 @@ class LH_GT : public BTB_Struct {
 		return nullptr;
 	}
 }
+
 
 
 //create&define Global History and Local Table
@@ -256,9 +319,9 @@ class GH_GT : public BTB_Struct {
 	public:
 	unsigned GlobalHistory=0;
 	int* GlobalFSMTable;
-	bool is_share;
+	int is_share;
 
-	GH_GT(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned fsmState, bool is_share)
+	GH_GT(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned fsmState, int is_share)
 		:BTB_Struct(btbSize, historySize, tagSize, fsmState) {
 			GlobalFSMTable = new int[1<<historySizeBits];
 			MEMSET(GlobalFSMTable, FsmDefault, 1<<historySizeBits);
@@ -286,6 +349,7 @@ class GH_GT : public BTB_Struct {
 
 /** 
 * @brief According to the parameters we will decide who we will turn on
+//not_using_share=0 using_share_lsb=1 using_share_mid=2
 */
 int GG=0;//global history,global table(fsm)
 int GL=0;//global history,local table(fsm)
