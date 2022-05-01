@@ -26,9 +26,6 @@ typedef struct BTB_data {
 	int* FSM_poiner; // for local history only, an array
 	uint32_t jumpLabeL; // target
 	bool valid;
-	//bool isGlobalHist;
-	//bool isGlobalTable;
-	//int Shared;
 }BTB_data;
 
 
@@ -44,10 +41,9 @@ class BTB_Struct {
 	BTB_data* BTB_pointer; // array
 	int num_of_updates;
 	int num_of_fails;
-	// SIM_stats* status;
-	//bool isGlobalHist_;
-	//bool isGlobalTable_;
-	//int Shared_;
+    void get_tag_n_index(uint32_t pc, unsigned &tag, int &index);
+    uint32_t run_share(unsigned history, uint32_t pc, int is_share, unsigned historySizeBits);// if lshare or gshare, xor history with some pc bits TODO understand which bits (different for l&g)
+
 
  	//Initialize the information in BTB && reset the data
 	BTB_Struct(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned fsmState) {
@@ -157,25 +153,6 @@ class BTB_Struct {
 
 
 
-////////haven't debugged yet////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/** 
-* @brief extract tag and index from pc
-*/
-    void get_tag_n_index(uint32_t pc, unsigned &tag, int &index){ // does not check existance, only translating the bits TODO implement (pc=pc>>2; )
-        uint32_t value_index;
-        value_index=pc>>2;//lowest 2 bits are zero
-        int numb_bit_table=log2(BTB_sizeLines);
-        tag=pc>>(2+numb_bit_table);//change the reference variable-tag from the pc
-        int mask=0;
-        while (numb_bit_table>=0){
-            mask=mask<<1;//shift left
-            mask++;
-            numb_bit_table--;
-        }
-        index=value_index & mask;//change the reference variable-index from the pc
-    }
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 
 
 
@@ -185,23 +162,23 @@ class BTB_Struct {
 	virtual int* get_state_array(BTB_data *entry);  // return GlobalFSMTable or entry->FSM_poiner
 	virtual int* local_fsm_array_create();          // return new int[1<<historySizeBits](FsmDefault) or nullptr if using GlobalFSMTable
 //	virtual int run_share(unsigned history, uint32_t pc); // if lshare or gshare, xor history with some pc bits TODO understand which bits (different for l&g)
-    int run_share(unsigned history, uint32_t pc, int is_share, unsigned historySizeBits); // if lshare or gshare, xor history with some pc bits TODO understand which bits (different for l&g)
+//  int run_share(unsigned history, uint32_t pc, int is_share, unsigned historySizeBits); 
 }
 
 
-////////haven't debugged yet////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 /** 
 * @brief Calculate what is the index-with XOR 
 */
-int BTB_Struct::run_share(unsigned history, uint32_t pc, int is_share, unsigned historySizeBits ){
+uint32_t BTB_Struct::run_share(unsigned history, uint32_t pc, int is_share, unsigned historySizeBits ){
     if (is_share==0){   //not_using_share
         return history;
     }
-    else if(is_share==0){  //using_share_lsb
+    else if(is_share==1){  //using_share_lsb
         pc=pc>>2;//get rid from two zero bits
         int mask =0;
         int History_bits=historySizeBits;
-        while(History_bits>=0){
+        while(History_bits>0){
             mask=mask<<1;
             mask++;
             History_bits--;
@@ -213,7 +190,7 @@ int BTB_Struct::run_share(unsigned history, uint32_t pc, int is_share, unsigned 
         pc=pc>>16;//get rid 16 lowest 16 bits
         int mask =0;
         int History_bits=historySizeBits;
-        while(History_bits>=0){
+        while(History_bits>0){
             mask=mask<<1;
             mask++;
             History_bits--;
@@ -221,7 +198,42 @@ int BTB_Struct::run_share(unsigned history, uint32_t pc, int is_share, unsigned 
         pc= mask & pc;
         return pc^history;
     }
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+}
+
+/** 
+* @brief extract tag and index from pc  *tagNumBits=numb of tag bits 0...
+*/
+    void BTB_Struct::get_tag_n_index(uint32_t pc, unsigned &tag, int &index){ // does not check existance, only translating the bits TODO implement (pc=pc>>2; )
+        uint32_t value_index=0;
+        int offsetTag=0;
+        int mask=0;
+        int numb_bit_table;
+
+        numb_bit_table=log2(BTB_sizeLines);
+        offsetTag=numb_bit_table+2;//how much offset we need to do to the pc-to extract tag
+        value_index=pc>>2;//lowest 2 bits are zero
+
+        while (numb_bit_table>0){
+            mask=mask<<1;//shift left
+            mask++;
+            numb_bit_table--;
+        }
+        index=value_index & mask;//change the reference variable-index from the pc
+       
+        mask=0;
+        value_index=0;
+        while (tagNumBits>0){
+            mask=mask<<1;//shift left
+            mask++;
+            tagNumBits--;
+        }
+        value_index=pc>>offsetTag;
+        tag=value_index & mask;
+    }
+
+
+
+
 
 //************part2***********************
 
